@@ -1,6 +1,6 @@
 import vk_api
 from vk_api.longpoll import VkLongPoll, VkEventType
-from third_party import generate_random_code
+from third_party import generate_random_code, auth_driver
 from models import Order
 
 session = None  # sends messages
@@ -15,13 +15,19 @@ active_drivers = list()
 
 def init():
     global session, host
-    session = vk_api.VkApi(token='YOUR_TOKEN')
+    session = vk_api.VkApi(
+        token='YOUR_TOKEN')
     host = VkLongPoll(session)
     main_loop()
 
 
 def send_message(user_id, message):
     session.method('messages.send', {'user_id': user_id, 'message': message, 'random_id': generate_random_code()})
+
+
+def send_order(order):
+    for driver in active_drivers:
+        send_message(driver.user_id, order)
 
 
 def main_loop():
@@ -46,7 +52,7 @@ def main_loop():
                     }
                     send_message(event.user_id, to_client_answers[0])
                     users_doing_order[event.user_id]['order_step'] += 1
-                elif event.text == 'Аутентификация водителя':
+                elif event.text == '!вход':
                     authenticating_drivers[event.user_id] = {
                         'auth_step': 0,
                         'login': '',
@@ -54,6 +60,25 @@ def main_loop():
                     }
                     send_message(event.user_id, to_driver_answers[0])
                     authenticating_drivers[event.user_id]['auth_step'] += 1
+                elif '!принять' in event.text:
+                    is_driver = False
+                    current_driver = None
+                    for driver in active_drivers:
+                        if driver.user_id == event.user_id:
+                            is_driver = True
+                            current_driver = driver
+                    if is_driver:
+                        order_id = event.text.rsplit(' ', 1)[-1]
+                        for order in active_orders:
+                            if order.unique_number == order_id:
+                                send_message(order.user_id,
+                                             'Ваш заказ принят! Информация о вашем водителе:\n' + current_driver.to_string())
+                                send_message(current_driver.user_id, 'Вы приняли заказ.')
+                                active_orders.remove(order)
+                            else:
+                                send_message(current_driver.user_id, 'Такого заказа нет или он уже принят.')
+                    else:
+                        send_message(event.user_id, 'Войдите в систему в качестве водителя')
                 elif event.user_id in users_doing_order.keys():
                     step = users_doing_order[event.user_id]['order_step']
                     # setting name
@@ -75,7 +100,9 @@ def main_loop():
                     if step == 4:
                         users_doing_order[event.user_id]['address_to'] = event.text
                         send_message(event.user_id, to_client_answers[step])
-                        active_orders.append(Order(event.user_id, users_doing_order[event.user_id]))
+                        order = Order(event.user_id, generate_random_code(), users_doing_order[event.user_id])
+                        send_order(order.to_string())
+                        active_orders.append(order)
                         del users_doing_order[event.user_id]
                 elif event.user_id in authenticating_drivers.keys():
                     step = authenticating_drivers[event.user_id]['auth_step']
@@ -87,7 +114,15 @@ def main_loop():
                     # password
                     if step == 2:
                         authenticating_drivers[event.user_id]['password'] = event.text
-                        # firebase database
+                        driver = auth_driver(event.user_id, authenticating_drivers[event.user_id]['login'],
+                                             authenticating_drivers[event.user_id]['password'])
+                        if driver is not None:
+                            active_drivers.append(driver)
+                            send_message(event.user_id,
+                                         driver.name + ', вы начали смену. Сюда вам будут приходить заказы!')
+                        else:
+                            send_message(event.user_id,
+                                         'Такого пользователя не существует, пожалуйста, свяжитесь с работодателем.')
                         del authenticating_drivers[event.user_id]
                 else:
                     send_message(event.user_id,

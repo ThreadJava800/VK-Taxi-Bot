@@ -1,5 +1,9 @@
 from random import choice
 from string import digits
+import firebase_admin
+from firebase_admin import credentials
+from firebase_admin import db
+from models import Driver
 
 
 def generate_random_code():
@@ -9,5 +13,23 @@ def generate_random_code():
     return ''.join(code)
 
 
-def find_driver(login, password):
-    pass
+def __init_firebase__():
+    cred = credentials.Certificate('YOUR_PATH_TO_FILE')
+    firebase_admin.initialize_app(cred, {
+        'databaseURL': 'YOUR_DB_URL'
+    })
+
+
+def auth_driver(user_id, login, password):
+    __init_firebase__()
+    snapshot = db.reference('drivers').get()
+    for driver in snapshot:
+        driver_credentials = snapshot[driver]
+        if driver_credentials['login'] == login and driver_credentials['password'] == password:
+            driver_reference = db.reference('drivers').child(driver)
+            # driver is online
+            driver_reference.update({
+                'active': 1,
+            })
+            return Driver(user_id, driver_credentials)
+    return None
